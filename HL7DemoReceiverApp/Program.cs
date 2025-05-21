@@ -11,6 +11,8 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Options;
 using Serilog;
+using System.Drawing;
+using Serilog.Sinks.SystemConsole.Themes;
 
 namespace HL7DemoReceiverApp
 {
@@ -192,6 +194,7 @@ namespace HL7DemoReceiverApp
                 {
                     var settings = context.Configuration.GetSection("Hl7").Get<Hl7Settings>();
                     configuration
+                    .WriteTo.Console(theme: AnsiConsoleTheme.Literate)
                         .WriteTo.File(settings.LogFilePath.Replace("{Date}", DateTime.Now.ToString("yyyyMMdd")))
                         .Enrich.FromLogContext();
                 })
