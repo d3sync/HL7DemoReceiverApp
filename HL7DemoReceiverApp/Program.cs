@@ -26,6 +26,8 @@ namespace HL7DemoReceiverApp
         public string LogFilePath { get; set; } = string.Empty;
         public string[] AllowedEvents { get; set; } = Array.Empty<string>();
         public string AckMode { get; set; } = "AA";
+        public string MessageDateTimeFormat { get; set; } = "yyyy-MM-dd HH:mm:ss";
+        public bool DisconnectAfterAck { get; set; } = false;
     }
 
     public interface IHl7ListenerService
@@ -110,16 +112,21 @@ namespace HL7DemoReceiverApp
                             buffer.Add((byte)data);
                         }
                         string hl7 = Encoding.ASCII.GetString(buffer.ToArray());
-                        Console.WriteLine($"Received HL7 message from {endpoint} at {DateTime.Now:HH:mm:ss}");
+                        string nowFmt = DateTime.Now.ToString(_settings.MessageDateTimeFormat);
+                        Console.WriteLine($"Received HL7 message from {endpoint} at {nowFmt}");
                         _logger.Information("Received HL7 message from {Endpoint}: {Message}", endpoint, hl7);
                         _logger.Debug("HL7 message content: {Message}", hl7);
-                        //LogMessage(hl7);
                         string controlId = ExtractMSH10(hl7);
                         string ack = BuildAck(hl7, controlId);
-                        Console.WriteLine($"Sending ACK to {endpoint} at {DateTime.Now:HH:mm:ss}");
+                        Console.WriteLine($"Sending ACK to {endpoint} at {nowFmt}");
                         _logger.Information("Sending ACK to {Endpoint}: {Ack}", endpoint, ack);
                         byte[] ackBytes = FrameMLLP(ack);
                         stream.Write(ackBytes, 0, ackBytes.Length);
+                        if (_settings.DisconnectAfterAck)
+                        {
+                            Console.WriteLine($"Disconnecting client {endpoint} after ACK as per configuration.");
+                            break;
+                        }
                     }
                 }
             }
@@ -154,7 +161,7 @@ namespace HL7DemoReceiverApp
             string sendingFac = msh?.Split(sep).ElementAtOrDefault(6) ?? _settings.SendingFacility;
             string receivingApp = msh?.Split(sep).ElementAtOrDefault(3) ?? _settings.ReceivingApplication;
             string receivingFac = msh?.Split(sep).ElementAtOrDefault(4) ?? _settings.ReceivingFacility;
-            string timestamp = DateTime.Now.ToString("yyyyMMddHHmmss", CultureInfo.InvariantCulture);
+            string timestamp = DateTime.Now.ToString(_settings.MessageDateTimeFormat, CultureInfo.InvariantCulture);
             string ackMsg =
                 $"MSH{sep}{encodingChars}{sep}{receivingApp}{sep}{receivingFac}{sep}{sendingApp}{sep}{sendingFac}{sep}{timestamp}{sep}{sep}ACK^R01{sep}{controlId}{sep}P{sep}2.3.1\r" +
                 $"MSA{sep}{_settings.AckMode}{sep}{controlId}\r";
