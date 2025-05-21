@@ -28,6 +28,9 @@ namespace HL7DemoReceiverApp
         public string AckMode { get; set; } = "AA";
         public string MessageDateTimeFormat { get; set; } = "yyyy-MM-dd HH:mm:ss";
         public bool DisconnectAfterAck { get; set; } = false;
+        public bool IsServer { get; set; } = true;
+        public string ClientHost { get; set; } = string.Empty;
+        public int ClientPort { get; set; } = 0;
     }
 
     public interface IHl7ListenerService
@@ -35,17 +38,11 @@ namespace HL7DemoReceiverApp
         void Run();
     }
 
-    public class Hl7ListenerService : IHl7ListenerService
+    public class Hl7ClientService : IHl7ListenerService
     {
         private readonly Hl7Settings _settings;
         private readonly Serilog.ILogger _logger;
-        private const byte VT = 0x0B;
-        private const byte FS = 0x1C;
-        private const byte CR = 0x0D;
-        private TcpListener? _listener;
-        private bool _running = true;
-
-        public Hl7ListenerService(IOptions<Hl7Settings> options, Serilog.ILogger logger)
+        public Hl7ClientService(IOptions<Hl7Settings> options, Serilog.ILogger logger)
         {
             _settings = options.Value;
             _logger = logger;
@@ -53,57 +50,64 @@ namespace HL7DemoReceiverApp
 
         public void Run()
         {
-            Console.CancelKeyPress += (s, e) => { _running = false; _listener?.Stop(); };
-            Directory.CreateDirectory(Path.GetDirectoryName(_settings.LogFilePath) ?? "logs");
-            _listener = new TcpListener(IPAddress.Any, _settings.Port);
-            _listener.Start();
-            Console.WriteLine($"HL7 MLLP Listener started on port {_settings.Port}.");
             try
             {
-                while (_running)
+                Console.WriteLine($"Connecting to HL7 MLLP server at {_settings.ClientHost}:{_settings.ClientPort}...");
+                using var client = new TcpClient();
+                client.Connect(_settings.ClientHost, _settings.ClientPort);
+                using var stream = client.GetStream();
+                Console.WriteLine("Connected to server. Type 'send' to send a message, or wait to receive HL7 messages. Type 'exit' to quit.");
+                var receiveThread = new Thread(() => ReceiveLoop(stream));
+                receiveThread.Start();
+                while (true)
                 {
-                    if (!_listener.Pending()) { Thread.Sleep(100); continue; }
-                    var client = _listener.AcceptTcpClient();
-                    ThreadPool.QueueUserWorkItem(HandleClient, client);
+                    string? input = Console.ReadLine();
+                    if (string.IsNullOrWhiteSpace(input)) continue;
+                    if (input.Trim().ToLower() == "exit") break;
+                    if (input.Trim().ToLower() == "send")
+                    {
+                        Console.WriteLine("Paste HL7 message (no MLLP framing). End with a blank line:");
+                        var sb = new StringBuilder();
+                        string? line;
+                        while (!string.IsNullOrEmpty(line = Console.ReadLine()))
+                        {
+                            sb.AppendLine(line);
+                        }
+                        string message = sb.ToString().Replace("\n", "").Replace("\r\n", "\r").TrimEnd('\r');
+                        byte[] framed = FrameMLLP(message);
+                        stream.Write(framed, 0, framed.Length);
+                        _logger.Information("Sent HL7 message: {Message}", message);
+                        Console.WriteLine($"Sent HL7 message at {DateTime.Now.ToString(_settings.MessageDateTimeFormat)}");
+                    }
                 }
             }
             catch (Exception ex)
             {
-                _logger.Error(ex, "Listener error");
-            }
-            finally
-            {
-                _listener.Stop();
+                _logger.Error(ex, "Client mode error");
+                Console.WriteLine($"Client mode error: {ex.Message}");
             }
         }
 
-        private void HandleClient(object? obj)
+        private void ReceiveLoop(NetworkStream stream)
         {
-            using var client = obj as TcpClient;
-            if (client == null) return;
-            var endpoint = client.Client.RemoteEndPoint?.ToString() ?? "unknown";
-            Console.WriteLine($"Client connected: {endpoint}");
-            _logger.Information("Client connected: {Endpoint}", endpoint);
+            var buffer = new List<byte>();
             try
             {
-                using var stream = client.GetStream();
-                var buffer = new List<byte>();
-                while (_running && client.Connected)
+                while (true)
                 {
                     int b = stream.ReadByte();
                     if (b == -1) break;
-                    if (b == VT)
+                    if (b == 0x0B) // VT
                     {
                         buffer.Clear();
-                        // Read until FS+CR
                         while (true)
                         {
                             int data = stream.ReadByte();
                             if (data == -1) break;
-                            if (data == FS)
+                            if (data == 0x1C) // FS
                             {
                                 int next = stream.ReadByte();
-                                if (next == CR)
+                                if (next == 0x0D) // CR
                                     break;
                                 if (next != -1) buffer.Add((byte)data);
                                 if (next != -1) buffer.Add((byte)next);
@@ -112,33 +116,23 @@ namespace HL7DemoReceiverApp
                             buffer.Add((byte)data);
                         }
                         string hl7 = Encoding.ASCII.GetString(buffer.ToArray());
-                        string nowFmt = DateTime.Now.ToString(_settings.MessageDateTimeFormat);
-                        Console.WriteLine($"Received HL7 message from {endpoint} at {nowFmt}");
-                        _logger.Information("Received HL7 message from {Endpoint}: {Message}", endpoint, hl7);
-                        _logger.Debug("HL7 message content: {Message}", hl7);
+                        Console.WriteLine($"Received HL7 message at {DateTime.Now.ToString(_settings.MessageDateTimeFormat)}:");
+                        Console.WriteLine(hl7);
+                        _logger.Information("Received HL7 message: {Message}", hl7);
                         string controlId = ExtractMSH10(hl7);
                         string ack = BuildAck(hl7, controlId);
-                        Console.WriteLine($"Sending ACK to {endpoint} at {nowFmt}");
-                        _logger.Information("Sending ACK to {Endpoint}: {Ack}", endpoint, ack);
                         byte[] ackBytes = FrameMLLP(ack);
                         stream.Write(ackBytes, 0, ackBytes.Length);
-                        if (_settings.DisconnectAfterAck)
-                        {
-                            Console.WriteLine($"Disconnecting client {endpoint} after ACK as per configuration.");
-                            break;
-                        }
+                        Console.WriteLine($"Sent ACK at {DateTime.Now.ToString(_settings.MessageDateTimeFormat)}:");
+                        Console.WriteLine(ack);
+                        _logger.Information("Sent ACK: {Ack}", ack);
                     }
                 }
             }
             catch (Exception ex)
             {
-                _logger.Error(ex, "Client error");
-                Console.WriteLine($"Client error: {ex.Message}");
-            }
-            finally
-            {
-                Console.WriteLine($"Client disconnected: {endpoint}");
-                _logger.Information("Client disconnected: {Endpoint}", endpoint);
+                _logger.Error(ex, "Receive loop error");
+                Console.WriteLine($"Receive loop error: {ex.Message}");
             }
         }
 
@@ -172,13 +166,141 @@ namespace HL7DemoReceiverApp
         {
             var msgBytes = Encoding.ASCII.GetBytes(message);
             var framed = new byte[msgBytes.Length + 3];
-            framed[0] = VT;
+            framed[0] = 0x0B;
             Buffer.BlockCopy(msgBytes, 0, framed, 1, msgBytes.Length);
-            framed[framed.Length - 2] = FS;
-            framed[framed.Length - 1] = CR;
+            framed[framed.Length - 2] = 0x1C;
+            framed[framed.Length - 1] = 0x0D;
             return framed;
         }
+    }
 
+    public class Hl7ListenerService : IHl7ListenerService
+    {
+        private readonly Hl7Settings _settings;
+        private readonly Serilog.ILogger _logger;
+
+        public Hl7ListenerService(IOptions<Hl7Settings> options, Serilog.ILogger logger)
+        {
+            _settings = options.Value;
+            _logger = logger;
+        }
+
+        public void Run()
+        {
+            try
+            {
+                Console.WriteLine($"Starting HL7 MLLP listener on port {_settings.Port}...");
+                var listener = new TcpListener(IPAddress.Any, _settings.Port);
+                listener.Start();
+                Console.WriteLine("Listener started. Waiting for connections...");
+                while (true)
+                {
+                    var client = listener.AcceptTcpClient();
+                    Console.WriteLine("Client connected.");
+                    var thread = new Thread(() => HandleClient(client));
+                    thread.Start();
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.Error(ex, "Listener mode error");
+                Console.WriteLine($"Listener mode error: {ex.Message}");
+            }
+        }
+
+        private void HandleClient(TcpClient client)
+        {
+            try
+            {
+                using var stream = client.GetStream();
+                var buffer = new List<byte>();
+                while (true)
+                {
+                    int b = stream.ReadByte();
+                    if (b == -1) break;
+                    if (b == 0x0B) // VT
+                    {
+                        buffer.Clear();
+                        while (true)
+                        {
+                            int data = stream.ReadByte();
+                            if (data == -1) break;
+                            if (data == 0x1C) // FS
+                            {
+                                int next = stream.ReadByte();
+                                if (next == 0x0D) // CR
+                                    break;
+                                if (next != -1) buffer.Add((byte)data);
+                                if (next != -1) buffer.Add((byte)next);
+                                continue;
+                            }
+                            buffer.Add((byte)data);
+                        }
+                        string message = Encoding.ASCII.GetString(buffer.ToArray());
+                        Console.WriteLine($"Received HL7 message at {DateTime.Now.ToString(_settings.MessageDateTimeFormat)}:");
+                        Console.WriteLine(message);
+                        _logger.Information("Received HL7 message: {Message}", message);
+                        if (_settings.AllowedEvents.Contains(GetEventType(message)))
+                        {
+                            string ack = GenerateAck(message);
+                            byte[] framedAck = FrameMLLP(ack);
+                            stream.Write(framedAck, 0, framedAck.Length);
+                            Console.WriteLine($"Sent ACK at {DateTime.Now.ToString(_settings.MessageDateTimeFormat)}:");
+                            Console.WriteLine(ack);
+                            _logger.Information("Sent ACK: {Ack}", ack);
+                        }
+                        if (_settings.DisconnectAfterAck)
+                            break;
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.Error(ex, "Error handling client");
+                Console.WriteLine($"Error handling client: {ex.Message}");
+            }
+            finally
+            {
+                client.Close();
+            }
+        }
+
+        private string GetEventType(string message)
+        {
+            var segments = message.Split('\r');
+            var msh = segments.FirstOrDefault(s => s.StartsWith("MSH"));
+            if (msh != null)
+            {
+                var fields = msh.Split('|');
+                if (fields.Length > 8)
+                    return fields[8];
+            }
+            return string.Empty;
+        }
+
+        private string GenerateAck(string message)
+        {
+            var segments = message.Split('\r');
+            var msh = segments.FirstOrDefault(s => s.StartsWith("MSH"));
+            if (msh != null)
+            {
+                var fields = msh.Split('|');
+                fields[9] = _settings.AckMode;
+                return string.Join("|", fields);
+            }
+            return string.Empty;
+        }
+
+        private byte[] FrameMLLP(string message)
+        {
+            var msgBytes = Encoding.ASCII.GetBytes(message);
+            var framed = new byte[msgBytes.Length + 3];
+            framed[0] = 0x0B;
+            Buffer.BlockCopy(msgBytes, 0, framed, 1, msgBytes.Length);
+            framed[framed.Length - 2] = 0x1C;
+            framed[framed.Length - 1] = 0x0D;
+            return framed;
+        }
     }
 
     internal class Program
@@ -195,7 +317,13 @@ namespace HL7DemoReceiverApp
                 .ConfigureServices((context, services) =>
                 {
                     services.Configure<Hl7Settings>(context.Configuration.GetSection("Hl7"));
-                    services.AddSingleton<IHl7ListenerService, Hl7ListenerService>();
+                    services.AddSingleton<Hl7ListenerService>();
+                    services.AddSingleton<Hl7ClientService>();
+                    services.AddSingleton<IHl7ListenerService>(sp =>
+                    {
+                        var settings = sp.GetRequiredService<IOptions<Hl7Settings>>().Value;
+                        return settings.IsServer ? sp.GetRequiredService<Hl7ListenerService>() : sp.GetRequiredService<Hl7ClientService>();
+                    });
                 })
                 .UseSerilog((context, services, configuration) =>
                 {
