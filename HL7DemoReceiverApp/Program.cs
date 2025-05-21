@@ -50,41 +50,50 @@ namespace HL7DemoReceiverApp
 
         public void Run()
         {
-            try
+            while (true)
             {
-                Console.WriteLine($"Connecting to HL7 MLLP server at {_settings.ClientHost}:{_settings.ClientPort}...");
-                using var client = new TcpClient();
-                client.Connect(_settings.ClientHost, _settings.ClientPort);
-                using var stream = client.GetStream();
-                Console.WriteLine("Connected to server. Type 'send' to send a message, or wait to receive HL7 messages. Type 'exit' to quit.");
-                var receiveThread = new Thread(() => ReceiveLoop(stream));
-                receiveThread.Start();
-                while (true)
+                try
                 {
-                    string? input = Console.ReadLine();
-                    if (string.IsNullOrWhiteSpace(input)) continue;
-                    if (input.Trim().ToLower() == "exit") break;
-                    if (input.Trim().ToLower() == "send")
+                    Console.WriteLine($"Connecting to HL7 MLLP server at {_settings.ClientHost}:{_settings.ClientPort}...");
+                    using var client = new TcpClient();
+                    client.Connect(_settings.ClientHost, _settings.ClientPort);
+                    using var stream = client.GetStream();
+                    Console.WriteLine("Connected to server. Type 'send' to send a message, or wait to receive HL7 messages. Type 'exit' to quit.");
+                    var receiveThread = new Thread(() => ReceiveLoop(stream));
+                    receiveThread.Start();
+                    bool shouldExit = false;
+                    while (true)
                     {
-                        Console.WriteLine("Paste HL7 message (no MLLP framing). End with a blank line:");
-                        var sb = new StringBuilder();
-                        string? line;
-                        while (!string.IsNullOrEmpty(line = Console.ReadLine()))
+                        string? input = Console.ReadLine();
+                        if (string.IsNullOrWhiteSpace(input)) continue;
+                        if (input.Trim().ToLower() == "exit") { shouldExit = true; break; }
+                        if (input.Trim().ToLower() == "send")
                         {
-                            sb.AppendLine(line);
+                            Console.WriteLine("Paste HL7 message (no MLLP framing). End with a blank line:");
+                            var sb = new StringBuilder();
+                            string? line;
+                            while (!string.IsNullOrEmpty(line = Console.ReadLine()))
+                            {
+                                sb.AppendLine(line);
+                            }
+                            string message = sb.ToString().Replace("\n", "").Replace("\r\n", "\r").TrimEnd('\r');
+                            byte[] framed = FrameMLLP(message);
+                            stream.Write(framed, 0, framed.Length);
+                            _logger.Information("Sent HL7 message: {Message}", message);
+                            Console.WriteLine($"Sent HL7 message at {DateTime.Now.ToString(_settings.MessageDateTimeFormat)}");
                         }
-                        string message = sb.ToString().Replace("\n", "").Replace("\r\n", "\r").TrimEnd('\r');
-                        byte[] framed = FrameMLLP(message);
-                        stream.Write(framed, 0, framed.Length);
-                        _logger.Information("Sent HL7 message: {Message}", message);
-                        Console.WriteLine($"Sent HL7 message at {DateTime.Now.ToString(_settings.MessageDateTimeFormat)}");
                     }
+                    // Wait for receive thread to finish
+                    receiveThread.Join();
+                    if (shouldExit) break;
                 }
-            }
-            catch (Exception ex)
-            {
-                _logger.Error(ex, "Client mode error");
-                Console.WriteLine($"Client mode error: {ex.Message}");
+                catch (Exception ex)
+                {
+                    _logger.Error(ex, "Client mode error");
+                    Console.WriteLine($"Client mode error: {ex.Message}");
+                }
+                Console.WriteLine("Reconnecting in 1 second...");
+                Thread.Sleep(1000);
             }
         }
 
@@ -126,6 +135,12 @@ namespace HL7DemoReceiverApp
                         Console.WriteLine($"Sent ACK at {DateTime.Now.ToString(_settings.MessageDateTimeFormat)}:");
                         Console.WriteLine(ack);
                         _logger.Information("Sent ACK: {Ack}", ack);
+                        if (_settings.DisconnectAfterAck)
+                        {
+                            Console.WriteLine("DisconnectAfterAck is true. Closing client connection.");
+                            stream.Close();
+                            break;
+                        }
                     }
                 }
             }
@@ -248,9 +263,18 @@ namespace HL7DemoReceiverApp
                             Console.WriteLine($"Sent ACK at {DateTime.Now.ToString(_settings.MessageDateTimeFormat)}:");
                             Console.WriteLine(ack);
                             _logger.Information("Sent ACK: {Ack}", ack);
+                            if (_settings.DisconnectAfterAck)
+                            {
+                                Console.WriteLine("DisconnectAfterAck is true. Closing client connection.");
+                                break;
+                            }
                         }
-                        if (_settings.DisconnectAfterAck)
+                        else if (_settings.DisconnectAfterAck)
+                        {
+                            // If not allowed event but still want to disconnect after receiving
+                            Console.WriteLine("DisconnectAfterAck is true. Closing client connection.");
                             break;
+                        }
                     }
                 }
             }
