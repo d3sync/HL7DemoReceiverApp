@@ -10,8 +10,7 @@ using Serilog;
 using System.Drawing;
 using Serilog.Sinks.SystemConsole.Themes;
 
-namespace HL7DemoReceiverApp;
-
+namespace HL7ProxyBridge;
 
 internal class Program
 {
@@ -29,9 +28,13 @@ internal class Program
                 services.Configure<Hl7Settings>(context.Configuration.GetSection("Hl7"));
                 services.AddSingleton<Hl7ListenerService>();
                 services.AddSingleton<Hl7ClientService>();
+                services.AddSingleton<Hl7ProxyService>();
                 services.AddSingleton<IHl7ListenerService>(sp =>
                 {
                     var settings = sp.GetRequiredService<IOptions<Hl7Settings>>().Value;
+                    var mode = context.Configuration.GetValue<string>("Hl7:Mode")?.ToLowerInvariant();
+                    if (mode == "proxy")
+                        return sp.GetRequiredService<Hl7ProxyService>();
                     return settings.IsServer ? sp.GetRequiredService<Hl7ListenerService>() : sp.GetRequiredService<Hl7ClientService>();
                 });
             })

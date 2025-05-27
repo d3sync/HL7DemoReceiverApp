@@ -3,7 +3,7 @@ using System.Text;
 using System.Globalization;
 using Microsoft.Extensions.Options;
 
-namespace HL7DemoReceiverApp;
+namespace HL7ProxyBridge;
 
 public class Hl7ClientService : IHl7ListenerService
 {
