@@ -31,7 +31,7 @@ namespace HL7ProxyBridge
                 while (true)
                 {
                     var client = listener.AcceptTcpClient();
-                    Console.WriteLine("Client connected.");
+                    Console.WriteLine($"Client connected <<<< {client.Client.LocalEndPoint?.ToString()}");
                     var thread = new Thread(() => HandleClient(client));
                     thread.Start();
                 }
