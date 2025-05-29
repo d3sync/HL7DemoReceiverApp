@@ -24,14 +24,14 @@ namespace HL7ProxyBridge
         {
             try
             {
-                Console.WriteLine($"Starting HL7 MLLP listener on port {_settings.Port}...");
+                _logger.Information("Starting HL7 MLLP listener on port {Port}...", _settings.Port);
                 var listener = new TcpListener(IPAddress.Any, _settings.Port);
                 listener.Start();
-                Console.WriteLine("Listener started. Waiting for connections...");
+                _logger.Information("Listener started. Waiting for connections...");
                 while (true)
                 {
                     var client = listener.AcceptTcpClient();
-                    Console.WriteLine($"Client connected <<<< {client.Client.LocalEndPoint?.ToString()}");
+                    _logger.Information("Client connected <<<< {EndPoint}", client.Client.LocalEndPoint?.ToString());
                     var thread = new Thread(() => HandleClient(client));
                     thread.Start();
                 }
@@ -39,7 +39,6 @@ namespace HL7ProxyBridge
             catch (Exception ex)
             {
                 _logger.Error(ex, "Listener mode error");
-                Console.WriteLine($"Listener mode error: {ex.Message}");
             }
         }
 
@@ -72,27 +71,25 @@ namespace HL7ProxyBridge
                             buffer.Add((byte)data);
                         }
                         string message = Encoding.ASCII.GetString(buffer.ToArray());
-                        Console.WriteLine($"Received HL7 message at {DateTime.Now.ToString(_settings.MessageDateTimeFormat)}:");
-                        Console.WriteLine(message);
-                        _logger.Information("Received HL7 message: {Message}", message);
+                        _logger.Information("Received HL7 message at {Time}:", DateTime.Now.ToString(_settings.MessageDateTimeFormat));
+                        _logger.Information("{Message}", message);
                         if (_settings.AllowedEvents.Contains(GetEventType(message)))
                         {
                             string ack = GenerateAck(message);
                             byte[] framedAck = FrameMLLP(ack);
                             stream.Write(framedAck, 0, framedAck.Length);
-                            Console.WriteLine($"Sent ACK at {DateTime.Now.ToString(_settings.MessageDateTimeFormat)}:");
-                            Console.WriteLine(ack);
-                            _logger.Information("Sent ACK: {Ack}", ack);
+                            _logger.Information("Sent ACK at {Time}:", DateTime.Now.ToString(_settings.MessageDateTimeFormat));
+                            _logger.Information("{Ack}", ack);
                             if (_settings.DisconnectAfterAck)
                             {
-                                Console.WriteLine("DisconnectAfterAck is true. Closing client connection.");
+                                _logger.Information("DisconnectAfterAck is true. Closing client connection.");
                                 break;
                             }
                         }
                         else if (_settings.DisconnectAfterAck)
                         {
                             // If not allowed event but still want to disconnect after receiving
-                            Console.WriteLine("DisconnectAfterAck is true. Closing client connection.");
+                            _logger.Information("DisconnectAfterAck is true. Closing client connection.");
                             break;
                         }
                     }
@@ -101,7 +98,6 @@ namespace HL7ProxyBridge
             catch (Exception ex)
             {
                 _logger.Error(ex, "Error handling client");
-                Console.WriteLine($"Error handling client: {ex.Message}");
             }
             finally
             {

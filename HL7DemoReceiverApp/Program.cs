@@ -53,7 +53,11 @@ internal class Program
                 .Build();
 
             // Run as a service (or console app if not installed as service)
-            host.Run();
+            using (var scope = host.Services.CreateScope())
+            {
+                var svc = scope.ServiceProvider.GetRequiredService<IHl7ListenerService>();
+                svc.Run();
+            }
         }
         catch (Exception ex)
         {

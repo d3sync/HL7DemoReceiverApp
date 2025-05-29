@@ -41,13 +41,13 @@ public class Hl7ProxyService : IHl7ListenerService
     {
         var listener = new TcpListener(IPAddress.Any, _settings.Port);
         listener.Start();
-        Console.WriteLine($"Proxy listening for analyzer on port {_settings.Port}...");
+        _logger.Information("Proxy listening for analyzer on port {Port}...", _settings.Port);
         var lisThread = new Thread(ConnectToClientSide);
         lisThread.Start();
         while (_running)
         {
             var analyzerClient = listener.AcceptTcpClient();
-            Console.WriteLine("Analyzer connected.");
+            _logger.Information("Analyzer connected.");
             var thread = new Thread(() => HandleListenerSideWithAck(analyzerClient));
             thread.Start();
         }
@@ -85,7 +85,6 @@ public class Hl7ProxyService : IHl7ListenerService
                     string hl7 = Encoding.ASCII.GetString(buffer.ToArray());
                     if (Hl7Utils.IsAckMessage(hl7))
                     {
-                        Console.WriteLine($"[Proxy] Intercepted ACK, dropping.");
                         _logger.Information("[Proxy] Intercepted ACK, dropping.");
                         continue;
                     }
@@ -94,20 +93,17 @@ public class Hl7ProxyService : IHl7ListenerService
                     string ack = Hl7Utils.BuildAck(hl7, controlId, _settings);
                     var ackBytes = Hl7Utils.FrameMLLP(ack);
                     stream.Write(ackBytes, 0, ackBytes.Length);
-                    Console.WriteLine($"[Proxy] Sent ACK to analyzer: {ack}");
                     _logger.Information("[Proxy] Sent ACK to analyzer: {Ack}", ack);
                     // Forward to LIS if connected, else buffer
                     if (_clientConnected && _clientStream != null)
                     {
                         var framed = Encoding.ASCII.GetBytes(hl7); // Already MLLP framed
                         _clientStream.Write(framed, 0, framed.Length);
-                        Console.WriteLine($"[Proxy] Forwarded to LIS: {hl7}");
                         _logger.Information("[Proxy] Forwarded to LIS: {Message}", hl7);
                     }
                     else
                     {
                         _toLisBuffer.Enqueue(hl7);
-                        Console.WriteLine("[Proxy] LIS not connected, message buffered.");
                         _logger.Information("[Proxy] LIS not connected, message buffered.");
                     }
                 }
@@ -116,7 +112,6 @@ public class Hl7ProxyService : IHl7ListenerService
         catch (Exception ex)
         {
             _logger.Error(ex, "Proxy error handling listener side");
-            Console.WriteLine($"Proxy error handling listener side: {ex.Message}");
         }
     }
 
@@ -126,14 +121,14 @@ public class Hl7ProxyService : IHl7ListenerService
         // Start listener for LIS
         var lisListener = new TcpListener(IPAddress.Any, _settings.Port);
         lisListener.Start();
-        Console.WriteLine($"[Proxy] Listening for LIS on port {_settings.Port}...");
+        _logger.Information("[Proxy] Listening for LIS on port {Port}...", _settings.Port);
         // Connect to analyzer as client
         var analyzerThread = new Thread(ConnectToAnalyzerSide);
         analyzerThread.Start();
         while (_running)
         {
             var lisClient = lisListener.AcceptTcpClient();
-            Console.WriteLine("[Proxy] LIS connected.");
+            _logger.Information("[Proxy] LIS connected.");
             _lisStream = lisClient.GetStream();
             var thread = new Thread(() => HandleLISWithAckAndForward(lisClient));
             thread.Start();
@@ -152,7 +147,7 @@ public class Hl7ProxyService : IHl7ListenerService
                 var analyzerClient = new TcpClient();
                 analyzerClient.Connect(_settings.ClientHost, _settings.ClientPort);
                 _analyzerStream = analyzerClient.GetStream();
-                Console.WriteLine($"[Proxy] Connected to analyzer at {_settings.ClientHost}:{_settings.ClientPort}");
+                _logger.Information("[Proxy] Connected to analyzer at {Host}:{Port}", _settings.ClientHost, _settings.ClientPort);
                 var thread = new Thread(() => HandleAnalyzerWithAckAndForward(analyzerClient));
                 thread.Start();
                 var flushThread = new Thread(FlushBufferToLIS);
@@ -162,14 +157,13 @@ public class Hl7ProxyService : IHl7ListenerService
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"[Proxy] Analyzer connection error: {ex.Message}");
                 _logger.Error(ex, "[Proxy] Analyzer connection error");
             }
             finally
             {
                 _analyzerStream = null;
             }
-            Console.WriteLine("[Proxy] Reconnecting to analyzer in 1 second...");
+            _logger.Information("[Proxy] Reconnecting to analyzer in 1 second...");
             Thread.Sleep(1000);
         }
     }
@@ -205,7 +199,6 @@ public class Hl7ProxyService : IHl7ListenerService
                     string hl7 = Encoding.ASCII.GetString(buffer.ToArray());
                     if (Hl7Utils.IsAckMessage(hl7))
                     {
-                        Console.WriteLine("[Proxy] Intercepted ACK from LIS, dropping.");
                         _logger.Information("[Proxy] Intercepted ACK from LIS, dropping.");
                         continue;
                     }
@@ -214,20 +207,17 @@ public class Hl7ProxyService : IHl7ListenerService
                     string ack = Hl7Utils.BuildAck(hl7, controlId, _settings);
                     var ackBytes = Hl7Utils.FrameMLLP(ack);
                     stream.Write(ackBytes, 0, ackBytes.Length);
-                    Console.WriteLine($"[Proxy] Sent ACK to LIS: {ack}");
                     _logger.Information("[Proxy] Sent ACK to LIS: {Ack}", ack);
                     // Forward to analyzer if connected, else buffer
                     if (_analyzerStream != null)
                     {
                         var framed = Encoding.ASCII.GetBytes(hl7);
                         _analyzerStream.Write(framed, 0, framed.Length);
-                        Console.WriteLine($"[Proxy] Forwarded to analyzer: {hl7}");
                         _logger.Information("[Proxy] Forwarded to analyzer: {Message}", hl7);
                     }
                     else
                     {
                         _toAnalyzerBuffer.Enqueue(hl7);
-                        Console.WriteLine("[Proxy] Analyzer not connected, message buffered.");
                         _logger.Information("[Proxy] Analyzer not connected, message buffered.");
                     }
                 }
@@ -236,7 +226,6 @@ public class Hl7ProxyService : IHl7ListenerService
         catch (Exception ex)
         {
             _logger.Error(ex, "Proxy error handling LIS side");
-            Console.WriteLine($"Proxy error handling LIS side: {ex.Message}");
         }
     }
 
@@ -271,7 +260,6 @@ public class Hl7ProxyService : IHl7ListenerService
                     string hl7 = Encoding.ASCII.GetString(buffer.ToArray());
                     if (Hl7Utils.IsAckMessage(hl7))
                     {
-                        Console.WriteLine("[Proxy] Intercepted ACK from analyzer, dropping.");
                         _logger.Information("[Proxy] Intercepted ACK from analyzer, dropping.");
                         continue;
                     }
@@ -280,20 +268,17 @@ public class Hl7ProxyService : IHl7ListenerService
                     {
                         var framed = Encoding.ASCII.GetBytes(hl7);
                         _lisStream.Write(framed, 0, framed.Length);
-                        Console.WriteLine($"[Proxy] Forwarded to LIS: {hl7}");
                         _logger.Information("[Proxy] Forwarded to LIS: {Message}", hl7);
                         // Send ACK to analyzer after forwarding
                         string controlId = Hl7Utils.ExtractMSH10(hl7);
                         string ack = Hl7Utils.BuildAck(hl7, controlId, _settings);
                         var ackBytes = Hl7Utils.FrameMLLP(ack);
                         stream.Write(ackBytes, 0, ackBytes.Length);
-                        Console.WriteLine($"[Proxy] Sent ACK to analyzer: {ack}");
                         _logger.Information("[Proxy] Sent ACK to analyzer: {Ack}", ack);
                     }
                     else
                     {
                         _toLisBuffer.Enqueue(hl7);
-                        Console.WriteLine("[Proxy] LIS not connected, message buffered. ACK will be sent after delivery.");
                         _logger.Information("[Proxy] LIS not connected, message buffered. ACK will be sent after delivery.");
                     }
                 }
@@ -302,7 +287,6 @@ public class Hl7ProxyService : IHl7ListenerService
         catch (Exception ex)
         {
             _logger.Error(ex, "Proxy error handling analyzer side");
-            Console.WriteLine($"Proxy error handling analyzer side: {ex.Message}");
         }
     }
 
@@ -317,7 +301,6 @@ public class Hl7ProxyService : IHl7ListenerService
                 {
                     var framed = Encoding.ASCII.GetBytes(msg);
                     _analyzerStream.Write(framed, 0, framed.Length);
-                    Console.WriteLine($"[Proxy] Forwarded buffered message to analyzer: {msg}");
                     _logger.Information("[Proxy] Forwarded buffered message to analyzer: {Message}", msg);
                 }
                 catch (Exception ex)
@@ -342,7 +325,6 @@ public class Hl7ProxyService : IHl7ListenerService
                 {
                     var framed = Encoding.ASCII.GetBytes(msg);
                     _lisStream.Write(framed, 0, framed.Length);
-                    Console.WriteLine($"[Proxy] Forwarded buffered message to LIS: {msg}");
                     _logger.Information("[Proxy] Forwarded buffered message to LIS: {Message}", msg);
                     // Send ACK to analyzer if possible (find the original stream)
                     if (_analyzerStream != null)
@@ -351,7 +333,6 @@ public class Hl7ProxyService : IHl7ListenerService
                         string ack = Hl7Utils.BuildAck(msg, controlId, _settings);
                         var ackBytes = Hl7Utils.FrameMLLP(ack);
                         _analyzerStream.Write(ackBytes, 0, ackBytes.Length);
-                        Console.WriteLine($"[Proxy] Sent buffered ACK to analyzer: {ack}");
                         _logger.Information("[Proxy] Sent buffered ACK to analyzer: {Ack}", ack);
                     }
                 }
@@ -374,7 +355,6 @@ public class Hl7ProxyService : IHl7ListenerService
             {
                 var framed = Encoding.ASCII.GetBytes(message); // Already MLLP framed
                 _lastListenerStream.Write(framed, 0, framed.Length);
-                Console.WriteLine($"[Proxy] Forwarded to LIS: {message}");
                 _logger.Information("[Proxy] Forwarded to LIS: {Message}", message);
             }
         }
@@ -391,7 +371,7 @@ public class Hl7ProxyService : IHl7ListenerService
                 _clientSide.Connect(_settings.ClientHost, _settings.ClientPort);
                 _clientStream = _clientSide.GetStream();
                 _clientConnected = true;
-                Console.WriteLine($"[Proxy] Connected to LIS at {_settings.ClientHost}:{_settings.ClientPort}");
+                _logger.Information("[Proxy] Connected to LIS at {Host}:{Port}", _settings.ClientHost, _settings.ClientPort);
                 // Continuously flush the buffer while connected
                 var bufferFlushThread = new Thread(() => FlushBufferToLIS());
                 bufferFlushThread.Start();
@@ -421,7 +401,6 @@ public class Hl7ProxyService : IHl7ListenerService
                         string hl7 = Encoding.ASCII.GetString(buffer.ToArray());
                         if (Hl7Utils.IsAckMessage(hl7))
                         {
-                            Console.WriteLine($"[Proxy] Intercepted ACK from LIS, dropping.");
                             _logger.Information("[Proxy] Intercepted ACK from LIS, dropping.");
                             continue;
                         }
@@ -430,20 +409,17 @@ public class Hl7ProxyService : IHl7ListenerService
                         string ack = Hl7Utils.BuildAck(hl7, controlId, _settings);
                         var ackBytes = Hl7Utils.FrameMLLP(ack);
                         _clientStream.Write(ackBytes, 0, ackBytes.Length);
-                        Console.WriteLine($"[Proxy] Sent ACK to LIS: {ack}");
                         _logger.Information("[Proxy] Sent ACK to LIS: {Ack}", ack);
                         // Forward to analyzer
                         if (_lastListenerStream != null)
                         {
-                            Console.WriteLine($"[Proxy] Received from LIS, forwarding to analyzer: {hl7}");
-                            _logger.Information($"[Proxy] Received from LIS, forwarding to analyzer: {hl7}");
+                            _logger.Information("[Proxy] Received from LIS, forwarding to analyzer: {Message}", hl7);
                             var framed = Encoding.ASCII.GetBytes(hl7); // Already MLLP framed
                             _lastListenerStream.Write(framed, 0, framed.Length);
                         }
                         else
                         {
                             _toAnalyzerBuffer.Enqueue(hl7);
-                            Console.WriteLine("[Proxy] Analyzer not connected, message buffered.");
                             _logger.Information("[Proxy] Analyzer not connected, message buffered.");
                         }
                     }
@@ -454,7 +430,6 @@ public class Hl7ProxyService : IHl7ListenerService
             {
                 _clientConnected = false;
                 _logger.Error(ex, "Proxy LIS connection error");
-                Console.WriteLine($"Proxy LIS connection error: {ex.Message}");
             }
             finally
             {
@@ -462,7 +437,7 @@ public class Hl7ProxyService : IHl7ListenerService
                 _clientSide?.Close();
                 _clientConnected = false;
             }
-            Console.WriteLine("[Proxy] Reconnecting to LIS in 1 second...");
+            _logger.Information("[Proxy] Reconnecting to LIS in 1 second...");
             Thread.Sleep(1000);
         }
     }

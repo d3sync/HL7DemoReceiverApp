@@ -21,11 +21,11 @@ public class Hl7ClientService : IHl7ListenerService
         {
             try
             {
-                Console.WriteLine($"Connecting to HL7 MLLP server at {_settings.ClientHost}:{_settings.ClientPort}...");
+                _logger.Information("Connecting to HL7 MLLP server at {Host}:{Port}...", _settings.ClientHost, _settings.ClientPort);
                 using var client = new TcpClient();
                 client.Connect(_settings.ClientHost, _settings.ClientPort);
                 using var stream = client.GetStream();
-                Console.WriteLine("Connected to server. Type 'send' to send a message, or wait to receive HL7 messages. Type 'exit' to quit.");
+                _logger.Information("Connected to server. Type 'send' to send a message, or wait to receive HL7 messages. Type 'exit' to quit.");
                 var receiveThread = new Thread(() => ReceiveLoop(stream));
                 receiveThread.Start();
                 bool shouldExit = false;
@@ -36,7 +36,7 @@ public class Hl7ClientService : IHl7ListenerService
                     if (input.Trim().ToLower() == "exit") { shouldExit = true; break; }
                     if (input.Trim().ToLower() == "send")
                     {
-                        Console.WriteLine("Paste HL7 message (no MLLP framing). End with a blank line:");
+                        _logger.Information("Paste HL7 message (no MLLP framing). End with a blank line:");
                         var sb = new StringBuilder();
                         string? line;
                         while (!string.IsNullOrEmpty(line = Console.ReadLine()))
@@ -47,7 +47,7 @@ public class Hl7ClientService : IHl7ListenerService
                         byte[] framed = FrameMLLP(message);
                         stream.Write(framed, 0, framed.Length);
                         _logger.Information("Sent HL7 message: {Message}", message);
-                        Console.WriteLine($"Sent HL7 message at {DateTime.Now.ToString(_settings.MessageDateTimeFormat)}");
+                        _logger.Information("Sent HL7 message at {Time}", DateTime.Now.ToString(_settings.MessageDateTimeFormat));
                     }
                 }
                 // Wait for receive thread to finish
@@ -57,9 +57,8 @@ public class Hl7ClientService : IHl7ListenerService
             catch (Exception ex)
             {
                 _logger.Error(ex, "Client mode error");
-                Console.WriteLine($"Client mode error: {ex.Message}");
             }
-            Console.WriteLine("Reconnecting in 1 second...");
+            _logger.Information("Reconnecting in 1 second...");
             Thread.Sleep(1000);
         }
     }
@@ -92,19 +91,17 @@ public class Hl7ClientService : IHl7ListenerService
                         buffer.Add((byte)data);
                     }
                     string hl7 = Encoding.ASCII.GetString(buffer.ToArray());
-                    Console.WriteLine($"Received HL7 message at {DateTime.Now.ToString(_settings.MessageDateTimeFormat)}:");
-                    Console.WriteLine(hl7);
-                    _logger.Information("Received HL7 message: {Message}", hl7);
+                    _logger.Information("Received HL7 message at {Time}:", DateTime.Now.ToString(_settings.MessageDateTimeFormat));
+                    _logger.Information("{Message}", hl7);
                     string controlId = ExtractMSH10(hl7);
                     string ack = BuildAck(hl7, controlId);
                     byte[] ackBytes = FrameMLLP(ack);
                     stream.Write(ackBytes, 0, ackBytes.Length);
-                    Console.WriteLine($"Sent ACK at {DateTime.Now.ToString(_settings.MessageDateTimeFormat)}:");
-                    Console.WriteLine(ack);
-                    _logger.Information("Sent ACK: {Ack}", ack);
+                    _logger.Information("Sent ACK at {Time}:", DateTime.Now.ToString(_settings.MessageDateTimeFormat));
+                    _logger.Information("{Ack}", ack);
                     if (_settings.DisconnectAfterAck)
                     {
-                        Console.WriteLine("DisconnectAfterAck is true. Closing client connection.");
+                        _logger.Information("DisconnectAfterAck is true. Closing client connection.");
                         stream.Close();
                         break;
                     }
@@ -114,7 +111,6 @@ public class Hl7ClientService : IHl7ListenerService
         catch (Exception ex)
         {
             _logger.Error(ex, "Receive loop error");
-            Console.WriteLine($"Receive loop error: {ex.Message}");
         }
     }
 
