@@ -97,7 +97,7 @@ public class Hl7ProxyService : IHl7ListenerService
                     // Forward to LIS if connected, else buffer
                     if (_clientConnected && _clientStream != null)
                     {
-                        var framed = Encoding.ASCII.GetBytes(hl7); // Already MLLP framed
+                        var framed = Hl7Utils.FrameMLLP(hl7); // Always re-frame
                         _clientStream.Write(framed, 0, framed.Length);
                         _logger.Information("[Proxy] Forwarded to LIS: {Message}", hl7);
                     }
@@ -211,7 +211,7 @@ public class Hl7ProxyService : IHl7ListenerService
                     // Forward to analyzer if connected, else buffer
                     if (_analyzerStream != null)
                     {
-                        var framed = Encoding.ASCII.GetBytes(hl7);
+                        var framed = Hl7Utils.FrameMLLP(hl7); // Always re-frame
                         _analyzerStream.Write(framed, 0, framed.Length);
                         _logger.Information("[Proxy] Forwarded to analyzer: {Message}", hl7);
                     }
@@ -266,7 +266,7 @@ public class Hl7ProxyService : IHl7ListenerService
                     // Forward to LIS if connected, else buffer
                     if (_lisStream != null)
                     {
-                        var framed = Encoding.ASCII.GetBytes(hl7);
+                        var framed = Hl7Utils.FrameMLLP(hl7); // Always re-frame
                         _lisStream.Write(framed, 0, framed.Length);
                         _logger.Information("[Proxy] Forwarded to LIS: {Message}", hl7);
                         // Send ACK to analyzer after forwarding
@@ -299,7 +299,7 @@ public class Hl7ProxyService : IHl7ListenerService
             {
                 try
                 {
-                    var framed = Encoding.ASCII.GetBytes(msg);
+                    var framed = Hl7Utils.FrameMLLP(msg); // Always re-frame
                     _analyzerStream.Write(framed, 0, framed.Length);
                     _logger.Information("[Proxy] Forwarded buffered message to analyzer: {Message}", msg);
                 }
@@ -323,7 +323,7 @@ public class Hl7ProxyService : IHl7ListenerService
             {
                 try
                 {
-                    var framed = Encoding.ASCII.GetBytes(msg);
+                    var framed = Hl7Utils.FrameMLLP(msg); // Always re-frame
                     _lisStream.Write(framed, 0, framed.Length);
                     _logger.Information("[Proxy] Forwarded buffered message to LIS: {Message}", msg);
                     // Send ACK to analyzer if possible (find the original stream)
@@ -353,7 +353,7 @@ public class Hl7ProxyService : IHl7ListenerService
         {
             while (_toAnalyzerBuffer.TryDequeue(out var message))
             {
-                var framed = Encoding.ASCII.GetBytes(message); // Already MLLP framed
+                var framed = Hl7Utils.FrameMLLP(message); // Always re-frame
                 _lastListenerStream.Write(framed, 0, framed.Length);
                 _logger.Information("[Proxy] Forwarded to LIS: {Message}", message);
             }
@@ -414,7 +414,7 @@ public class Hl7ProxyService : IHl7ListenerService
                         if (_lastListenerStream != null)
                         {
                             _logger.Information("[Proxy] Received from LIS, forwarding to analyzer: {Message}", hl7);
-                            var framed = Encoding.ASCII.GetBytes(hl7); // Already MLLP framed
+                            var framed = Hl7Utils.FrameMLLP(hl7); // Always re-frame
                             _lastListenerStream.Write(framed, 0, framed.Length);
                         }
                         else
