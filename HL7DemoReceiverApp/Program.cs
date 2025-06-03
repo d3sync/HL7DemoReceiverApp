@@ -19,10 +19,13 @@ internal class Program
     {
         try
         {
+            var exePath = AppContext.BaseDirectory;
+            var configFile = Path.Combine(exePath, "appsettings.json");
+
             var host = Host.CreateDefaultBuilder(args)
                 .ConfigureAppConfiguration((hostingContext, config) =>
                 {
-                    config.AddJsonFile("appsettings.json", optional: false, reloadOnChange: true)
+                    config.AddJsonFile(configFile, optional: false, reloadOnChange: true)
                           .AddJsonFile($"appsettings.{hostingContext.HostingEnvironment.EnvironmentName}.json", optional: true)
                           .AddEnvironmentVariables();
                 })
