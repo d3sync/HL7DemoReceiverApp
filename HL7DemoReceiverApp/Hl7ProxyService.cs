@@ -3,10 +3,13 @@ using System.Net.Sockets;
 using System.Text;
 using System.Collections.Concurrent;
 using Microsoft.Extensions.Options;
+using Microsoft.Extensions.Hosting;
+using System.Threading;
+using System.Threading.Tasks;
 
 namespace HL7ProxyBridge;
 
-public class Hl7ProxyService : IHl7ListenerService
+public class Hl7ProxyService : BackgroundService
 {
     private readonly Hl7Settings _settings;
     private readonly Serilog.ILogger _logger;
@@ -28,28 +31,36 @@ public class Hl7ProxyService : IHl7ListenerService
         _logger = logger;
     }
 
-    public void Run()
+    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
+        _running = true;
         if (_settings.ProxyDirection.ToLowerInvariant() == "clienttolistener")
-            ClientToListenerProxy();
+            await Task.Run(() => ClientToListenerProxy(stoppingToken), stoppingToken);
         else
-            ListenerToClientProxy();
+            await Task.Run(() => ListenerToClientProxy(stoppingToken), stoppingToken);
     }
 
     // Analyzer (listener) -> Proxy -> LIS (client)
-    private void ListenerToClientProxy()
+    private void ListenerToClientProxy(CancellationToken stoppingToken)
     {
         var listener = new TcpListener(IPAddress.Any, _settings.Port);
         listener.Start();
         _logger.Information("Proxy listening for analyzer on port {Port}...", _settings.Port);
-        var lisThread = new Thread(ConnectToClientSide);
+        var lisThread = new Thread(() => ConnectToClientSide(stoppingToken));
         lisThread.Start();
-        while (_running)
+        while (_running && !stoppingToken.IsCancellationRequested)
         {
-            var analyzerClient = listener.AcceptTcpClient();
-            _logger.Information("Analyzer connected.");
-            var thread = new Thread(() => HandleListenerSideWithAck(analyzerClient));
-            thread.Start();
+            if (listener.Pending())
+            {
+                var analyzerClient = listener.AcceptTcpClient();
+                _logger.Information("Analyzer connected.");
+                var thread = new Thread(() => HandleListenerSideWithAck(analyzerClient));
+                thread.Start();
+            }
+            else
+            {
+                Thread.Sleep(100);
+            }
         }
     }
 
@@ -116,31 +127,38 @@ public class Hl7ProxyService : IHl7ListenerService
     }
 
     // Proxy connects as client to analyzer, listens for LIS
-    private void ClientToListenerProxy()
+    private void ClientToListenerProxy(CancellationToken stoppingToken)
     {
         // Start listener for LIS
         var lisListener = new TcpListener(IPAddress.Any, _settings.Port);
         lisListener.Start();
         _logger.Information("[Proxy] Listening for LIS on port {Port}...", _settings.Port);
         // Connect to analyzer as client
-        var analyzerThread = new Thread(ConnectToAnalyzerSide);
+        var analyzerThread = new Thread(() => ConnectToAnalyzerSide(stoppingToken));
         analyzerThread.Start();
-        while (_running)
+        while (_running && !stoppingToken.IsCancellationRequested)
         {
-            var lisClient = lisListener.AcceptTcpClient();
-            _logger.Information("[Proxy] LIS connected.");
-            _lisStream = lisClient.GetStream();
-            var thread = new Thread(() => HandleLISWithAckAndForward(lisClient));
-            thread.Start();
-            var flushThread = new Thread(FlushBufferToAnalyzer);
-            flushThread.Start();
+            if (lisListener.Pending())
+            {
+                var lisClient = lisListener.AcceptTcpClient();
+                _logger.Information("[Proxy] LIS connected.");
+                _lisStream = lisClient.GetStream();
+                var thread = new Thread(() => HandleLISWithAckAndForward(lisClient));
+                thread.Start();
+                var flushThread = new Thread(FlushBufferToAnalyzer);
+                flushThread.Start();
+            }
+            else
+            {
+                Thread.Sleep(100);
+            }
         }
     }
 
     // Connect to analyzer as client and handle messages
-    private void ConnectToAnalyzerSide()
+    private void ConnectToAnalyzerSide(CancellationToken stoppingToken)
     {
-        while (_running)
+        while (_running && !stoppingToken.IsCancellationRequested)
         {
             try
             {
@@ -361,9 +379,9 @@ public class Hl7ProxyService : IHl7ListenerService
     }
 
     // Connects to LIS as a client, receives messages from LIS, and forwards to analyzer (listener side)
-    private void ConnectToClientSide()
+    private void ConnectToClientSide(CancellationToken stoppingToken)
     {
-        while (_running)
+        while (_running && !stoppingToken.IsCancellationRequested)
         {
             try
             {

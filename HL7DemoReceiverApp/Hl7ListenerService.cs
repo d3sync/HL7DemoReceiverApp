@@ -2,14 +2,13 @@
 using System.Net.Sockets;
 using System.Text;
 using Microsoft.Extensions.Options;
+using Microsoft.Extensions.Hosting;
+using System.Threading;
+using System.Threading.Tasks;
 
 namespace HL7ProxyBridge
 {
-    public interface IHl7ListenerService
-    {
-        void Run();
-    }
-    public class Hl7ListenerService : IHl7ListenerService
+    public class Hl7ListenerService : BackgroundService
     {
         private readonly Hl7Settings _settings;
         private readonly Serilog.ILogger _logger;
@@ -20,7 +19,7 @@ namespace HL7ProxyBridge
             _logger = logger;
         }
 
-        public void Run()
+        protected override async Task ExecuteAsync(CancellationToken stoppingToken)
         {
             try
             {
@@ -28,27 +27,33 @@ namespace HL7ProxyBridge
                 var listener = new TcpListener(IPAddress.Any, _settings.Port);
                 listener.Start();
                 _logger.Information("Listener started. Waiting for connections...");
-                while (true)
+                while (!stoppingToken.IsCancellationRequested)
                 {
-                    var client = listener.AcceptTcpClient();
-                    _logger.Information("Client connected <<<< {EndPoint}", client.Client.LocalEndPoint?.ToString());
-                    var thread = new Thread(() => HandleClient(client));
-                    thread.Start();
+                    if (listener.Pending())
+                    {
+                        var client = await listener.AcceptTcpClientAsync(stoppingToken);
+                        _logger.Information("Client connected <<<< {EndPoint}", client.Client.LocalEndPoint?.ToString());
+                        _ = Task.Run(() => HandleClient(client, stoppingToken), stoppingToken);
+                    }
+                    else
+                    {
+                        await Task.Delay(100, stoppingToken);
+                    }
                 }
             }
-            catch (Exception ex)
+            catch (Exception ex) when (!(ex is OperationCanceledException))
             {
                 _logger.Error(ex, "Listener mode error");
             }
         }
 
-        private void HandleClient(TcpClient client)
+        private async Task HandleClient(TcpClient client, CancellationToken stoppingToken)
         {
             try
             {
                 using var stream = client.GetStream();
                 var buffer = new List<byte>();
-                while (true)
+                while (!stoppingToken.IsCancellationRequested)
                 {
                     int b = stream.ReadByte();
                     if (b == -1) break;
@@ -77,7 +82,7 @@ namespace HL7ProxyBridge
                         {
                             string ack = GenerateAck(message);
                             byte[] framedAck = FrameMLLP(ack);
-                            stream.Write(framedAck, 0, framedAck.Length);
+                            await stream.WriteAsync(framedAck, 0, framedAck.Length, stoppingToken);
                             _logger.Information("Sent ACK at {Time}:", DateTime.Now.ToString(_settings.MessageDateTimeFormat));
                             _logger.Information("{Ack}", ack);
                             if (_settings.DisconnectAfterAck)
@@ -88,7 +93,6 @@ namespace HL7ProxyBridge
                         }
                         else if (_settings.DisconnectAfterAck)
                         {
-                            // If not allowed event but still want to disconnect after receiving
                             _logger.Information("DisconnectAfterAck is true. Closing client connection.");
                             break;
                         }

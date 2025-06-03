@@ -1,6 +1,5 @@
 ﻿using System;
 using System.IO;
-using System.Threading;
 using System.Linq;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -32,17 +31,13 @@ internal class Program
                 .ConfigureServices((context, services) =>
                 {
                     services.Configure<Hl7Settings>(context.Configuration.GetSection("Hl7"));
-                    services.AddSingleton<Hl7ListenerService>();
-                    services.AddSingleton<Hl7ClientService>();
-                    services.AddSingleton<Hl7ProxyService>();
-                    services.AddSingleton<IHl7ListenerService>(sp =>
-                    {
-                        var settings = sp.GetRequiredService<IOptions<Hl7Settings>>().Value;
-                        var mode = context.Configuration.GetValue<string>("Hl7:Mode")?.ToLowerInvariant();
-                        if (mode == "proxy")
-                            return sp.GetRequiredService<Hl7ProxyService>();
-                        return settings.IsServer ? sp.GetRequiredService<Hl7ListenerService>() : sp.GetRequiredService<Hl7ClientService>();
-                    });
+                    var mode = context.Configuration.GetValue<string>("Hl7:Mode")?.ToLowerInvariant();
+                    if (mode == "proxy")
+                        services.AddHostedService<Hl7ProxyService>();
+                    else if (mode == "client")
+                        services.AddHostedService<Hl7ClientService>();
+                    else
+                        services.AddHostedService<Hl7ListenerService>();
                 })
                 .UseSerilog((context, services, configuration) =>
                 {
@@ -55,12 +50,7 @@ internal class Program
                 .UseWindowsService() // Enable running as a Windows Service
                 .Build();
 
-            // Run as a service (or console app if not installed as service)
-            using (var scope = host.Services.CreateScope())
-            {
-                var svc = scope.ServiceProvider.GetRequiredService<IHl7ListenerService>();
-                svc.Run();
-            }
+            host.Run();
         }
         catch (Exception ex)
         {

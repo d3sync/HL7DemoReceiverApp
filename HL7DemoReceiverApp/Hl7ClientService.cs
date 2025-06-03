@@ -2,10 +2,13 @@
 using System.Text;
 using System.Globalization;
 using Microsoft.Extensions.Options;
+using Microsoft.Extensions.Hosting;
+using System.Threading;
+using System.Threading.Tasks;
 
 namespace HL7ProxyBridge;
 
-public class Hl7ClientService : IHl7ListenerService
+public class Hl7ClientService : BackgroundService
 {
     private readonly Hl7Settings _settings;
     private readonly Serilog.ILogger _logger;
@@ -15,60 +18,66 @@ public class Hl7ClientService : IHl7ListenerService
         _logger = logger;
     }
 
-    public void Run()
+    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        while (true)
+        while (!stoppingToken.IsCancellationRequested)
         {
             try
             {
                 _logger.Information("Connecting to HL7 MLLP server at {Host}:{Port}...", _settings.ClientHost, _settings.ClientPort);
                 using var client = new TcpClient();
-                client.Connect(_settings.ClientHost, _settings.ClientPort);
+                await client.ConnectAsync(_settings.ClientHost, _settings.ClientPort);
                 using var stream = client.GetStream();
-                _logger.Information("Connected to server. Type 'send' to send a message, or wait to receive HL7 messages. Type 'exit' to quit.");
-                var receiveThread = new Thread(() => ReceiveLoop(stream));
-                receiveThread.Start();
-                bool shouldExit = false;
-                while (true)
+                if (Environment.UserInteractive)
                 {
-                    string? input = Console.ReadLine();
-                    if (string.IsNullOrWhiteSpace(input)) continue;
-                    if (input.Trim().ToLower() == "exit") { shouldExit = true; break; }
-                    if (input.Trim().ToLower() == "send")
+                    _logger.Information("Connected to server. Type 'send' to send a message, or wait to receive HL7 messages. Type 'exit' to quit.");
+                    var receiveTask = Task.Run(() => ReceiveLoop(stream, stoppingToken), stoppingToken);
+                    bool shouldExit = false;
+                    while (!stoppingToken.IsCancellationRequested)
                     {
-                        _logger.Information("Paste HL7 message (no MLLP framing). End with a blank line:");
-                        var sb = new StringBuilder();
-                        string? line;
-                        while (!string.IsNullOrEmpty(line = Console.ReadLine()))
+                        string? input = Console.ReadLine();
+                        if (string.IsNullOrWhiteSpace(input)) continue;
+                        if (input.Trim().ToLower() == "exit") { shouldExit = true; break; }
+                        if (input.Trim().ToLower() == "send")
                         {
-                            sb.AppendLine(line);
+                            _logger.Information("Paste HL7 message (no MLLP framing). End with a blank line:");
+                            var sb = new StringBuilder();
+                            string? line;
+                            while (!string.IsNullOrEmpty(line = Console.ReadLine()))
+                            {
+                                sb.AppendLine(line);
+                            }
+                            string message = sb.ToString().Replace("\n", "").Replace("\r\n", "\r").TrimEnd('\r');
+                            byte[] framed = FrameMLLP(message);
+                            await stream.WriteAsync(framed, 0, framed.Length, stoppingToken);
+                            _logger.Information("Sent HL7 message: {Message}", message);
+                            _logger.Information("Sent HL7 message at {Time}", DateTime.Now.ToString(_settings.MessageDateTimeFormat));
                         }
-                        string message = sb.ToString().Replace("\n", "").Replace("\r\n", "\r").TrimEnd('\r');
-                        byte[] framed = FrameMLLP(message);
-                        stream.Write(framed, 0, framed.Length);
-                        _logger.Information("Sent HL7 message: {Message}", message);
-                        _logger.Information("Sent HL7 message at {Time}", DateTime.Now.ToString(_settings.MessageDateTimeFormat));
                     }
+                    await receiveTask;
+                    if (shouldExit) break;
                 }
-                // Wait for receive thread to finish
-                receiveThread.Join();
-                if (shouldExit) break;
+                else
+                {
+                    _logger.Information("Running in service mode. Only receiving HL7 messages and sending ACKs.");
+                    await ReceiveLoop(stream, stoppingToken);
+                }
             }
-            catch (Exception ex)
+            catch (Exception ex) when (!(ex is OperationCanceledException))
             {
                 _logger.Error(ex, "Client mode error");
             }
             _logger.Information("Reconnecting in 1 second...");
-            Thread.Sleep(1000);
+            await Task.Delay(1000, stoppingToken);
         }
     }
 
-    private void ReceiveLoop(NetworkStream stream)
+    private async Task ReceiveLoop(NetworkStream stream, CancellationToken stoppingToken)
     {
         var buffer = new List<byte>();
         try
         {
-            while (true)
+            while (!stoppingToken.IsCancellationRequested)
             {
                 int b = stream.ReadByte();
                 if (b == -1) break;
@@ -96,7 +105,7 @@ public class Hl7ClientService : IHl7ListenerService
                     string controlId = ExtractMSH10(hl7);
                     string ack = BuildAck(hl7, controlId);
                     byte[] ackBytes = FrameMLLP(ack);
-                    stream.Write(ackBytes, 0, ackBytes.Length);
+                    await stream.WriteAsync(ackBytes, 0, ackBytes.Length, stoppingToken);
                     _logger.Information("Sent ACK at {Time}:", DateTime.Now.ToString(_settings.MessageDateTimeFormat));
                     _logger.Information("{Ack}", ack);
                     if (_settings.DisconnectAfterAck)
