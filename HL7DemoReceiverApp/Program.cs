@@ -9,6 +9,7 @@ using Serilog;
 using System.Drawing;
 using Serilog.Sinks.SystemConsole.Themes;
 using Microsoft.Extensions.Hosting.WindowsServices;
+using System.Threading.Tasks;
 
 namespace HL7ProxyBridge;
 
@@ -16,8 +17,20 @@ internal class Program
 {
     static void Main(string[] args)
     {
+        // Global exception handlers
+        AppDomain.CurrentDomain.UnhandledException += (sender, e) =>
+        {
+            Log.Fatal(e.ExceptionObject as Exception, "Unhandled exception occurred");
+        };
+        TaskScheduler.UnobservedTaskException += (sender, e) =>
+        {
+            Log.Fatal(e.Exception, "Unobserved task exception occurred");
+            e.SetObserved();
+        };
+
         try
         {
+            Log.Information("Application starting");
             var exePath = AppContext.BaseDirectory;
             var configFile = Path.Combine(exePath, "appsettings.json");
 
@@ -25,7 +38,7 @@ internal class Program
                 .ConfigureAppConfiguration((hostingContext, config) =>
                 {
                     config.AddJsonFile(configFile, optional: false, reloadOnChange: true)
-                          .AddJsonFile($"appsettings.{hostingContext.HostingEnvironment.EnvironmentName}.json", optional: true)
+                          //.AddJsonFile($"appsettings.{hostingContext.HostingEnvironment.EnvironmentName}.json", optional: true)
                           .AddEnvironmentVariables();
                 })
                 .ConfigureServices((context, services) =>
@@ -58,6 +71,7 @@ internal class Program
         }
         finally
         {
+            Log.Information("Application shutting down");
             Log.CloseAndFlush();
         }
     }
